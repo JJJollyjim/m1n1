@@ -2,8 +2,39 @@ from m1n1.trace import Tracer
 from m1n1.trace.dart8110 import DART8110Tracer
 from m1n1.hw.avd import *
 from m1n1.utils import *
+import subprocess
+import pathlib
 import struct
 
+
+def patched_firmware():
+    firmware = open("firmware_dump.bin", "rb").read()
+    while firmware[-16:] == (b"\x00"*16):
+        firmware = firmware[:-16]
+    init = int.from_bytes(firmware[4:8], "little")
+    print("Original init at: ", hex(init))
+    print("File length:", hex(len(firmware)))
+    assert len(firmware) % 16 == 0
+    ret = subprocess.call([
+        'arm-none-eabi-gcc',
+        '-ggdb',
+        '-nostdlib',
+        f'-Wl,-Ttext,{hex(len(firmware))}',
+        f'-DORIGINIT=#{hex(init)}',
+        '-o', 'pre_init.elf',
+        f'{pathlib.Path(__file__).resolve().parents[1]}/hv/pre_init.S'])
+    assert ret == 0
+    ret = subprocess.call([
+        'arm-none-eabi-objcopy',
+        '-O', 'binary',
+        'pre_init.elf',
+        'pre_init.bin'])
+    assert ret == 0
+    pre_init_code = open("pre_init.bin", "rb").read()
+    new_fw = firmware[0:4] + (len(firmware)+1).to_bytes(4, "little") + firmware[8:] + pre_init_code
+    new_fw += b"\x00"*(0x1_0000-len(new_fw))
+    open("patched_firwmare.bin", "wb").write(new_fw)
+    return new_fw
 
 def read_by_32(addr, len_):
     data = b''
@@ -11,6 +42,42 @@ def read_by_32(addr, len_):
         data += struct.pack("<I", p.read32(addr + i))
     return data
 
+class AVDFirmwareDumper(Tracer):
+    DEFAULT_MODE = TraceMode.SYNC
+    def __init__(self, hv, devpath, verbose=False):
+        super().__init__(hv, verbose=verbose, ident=type(self).__name__ + "@" + devpath)
+        self.dev = hv.adt[devpath]
+        self.firmware_buffer = bytearray(0x10000)
+    def start(self):
+        avd_base, _ = self.dev.get_reg(0)
+        self.avd_base = avd_base
+        self.trace(avd_base + 0x108_0000, 0x10000, mode=self.DEFAULT_MODE, prefix="CM3CODE")
+    def evt_rw(self, evt, regmap=None, prefix=None):
+        if evt.flags.WRITE:
+            off_start = evt.addr - (self.avd_base + 0x108_0000)
+            self.firmware_buffer[off_start:off_start+4] = evt.data.to_bytes(4, "little")
+            if off_start == 0x1_0000 - 4:
+                print("reached the end, writing buffer")
+                open("firmware_dump.bin", "wb").write(self.firmware_buffer)
+                self.stop()
+
+class AVDFirmwareSaboteur(Tracer):
+    DEFAULT_MODE = TraceMode.HOOK
+    def __init__(self, hv, devpath, verbose=False):
+        super().__init__(hv, verbose=verbose, ident=type(self).__name__ + "@" + devpath)
+        self.dev = hv.adt[devpath]
+        self.firmware_buffer = patched_firmware()
+    def start(self):
+        avd_base, _ = self.dev.get_reg(0)
+        self.avd_base = avd_base
+        self.trace(avd_base + 0x108_0000, 0x10000, mode=self.DEFAULT_MODE, prefix="CM3CODE")
+    def hook_w(self, addr, val, width, **kwargs):
+        off_start = addr - (self.avd_base + 0x108_0000)
+        assert width == 32
+        patched_val = int.from_bytes(self.firmware_buffer[off_start:(off_start+4)], "little")
+        if val != patched_val:
+            print(f"Firmware difference at {hex(off_start)}: {hex(val), hex(patched_val)}")
+        super().hook_w(addr, patched_val, width, **kwargs)
 
 class AVDTracer(Tracer):
     DEFAULT_MODE = TraceMode.SYNC
@@ -44,6 +111,7 @@ class AVDTracer(Tracer):
         # print("w", val)
         val = int(val)
         print("~~~~~ SUBMIT COMMAND @ {val:08X} ~~~~~")
+        print(f"~~~~~ THE MODIFIED FIRMWARE SAYS: {hex(p.read32(self.avd_base+0x109_0000+0xff0))} ~~~~~")
         if val >= 0x109_0000 and val < 0x10a_0000:
             data = read_by_32(self.avd_base + val, 0x60)
             chexdump(data)
@@ -66,3 +134,11 @@ print(dart_tracer)
 tracer = AVDTracer(hv, '/arm-io/avd0', dart_tracer, verbose=3)
 tracer.start()
 print(tracer)
+
+# fwdump = AVDFirmwareDumper(hv, '/arm-io/avd0')
+# fwdump.start()
+# print(fwdump)
+
+fwsab = AVDFirmwareSaboteur(hv, '/arm-io/avd0')
+fwsab.start()
+print(fwsab)
