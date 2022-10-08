@@ -158,49 +158,20 @@ _start:
 //  +0x1c = val
 //  +0xf0 = boot count
 start:
-    cpsid i
+    mov r1, #0
+    mov r2, #1
     mov r0, #0x10000000
-    movs r1, #0x55
-    str r1, [r0]
-
-    ldr r1, [r0, #0xf0]
-    adds r1, #1
-    str r1, [r0, #0xf0]
-
-1:
-    ldr r1, [r0, #0x10]
-    cmp r1, #2
-    beq wfi_cmd
-    cmp r1, #1
-    bne 1b
-
-    // addr
-    ldr r1, [r0, #0x14]
-    // WnR
-    ldr r2, [r0, #0x18]
-    cmp r2, #0
-    bne 2f
-    // read
-    ldr r2, [r1]
-    str r2, [r0, #0x1c]
-    movs r2, #0
-    str r2, [r0, #0x10]
-    b 1b
-2:
-    // write
-    ldr r2, [r0, #0x1c]
-    str r2, [r1]
-    movs r2, #0
-    str r2, [r0, #0x10]
-    b 1b
-
-wfi_cmd:
-    movs r1, #0
-    str r1, [r0, #0x10]
-    wfi
-    movs r1, #0xaa
+loop:
+    add r1, r2
     str r1, [r0, #0x1c]
-    b 1b
+    str r1, [r0, #0x18]
+    str r1, [r0, #0x14]
+    str r1, [r0, #0x10]
+    str r1, [r0, #0xc]
+    str r1, [r0, #0x8]
+    str r1, [r0, #0x4]
+    str r1, [r0]
+    b loop
 
 nmi:
     mov r0, #0x10000000

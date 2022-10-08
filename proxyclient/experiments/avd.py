@@ -7,9 +7,20 @@ from m1n1.setup import *
 from m1n1.hw.avd import *
 from m1n1.hw.dart8110 import DART8110
 from m1n1.utils import *
+from hv.fwpatch import patch
 import struct
 import subprocess
 import time
+import re
+
+debugmon_c_source = open((pathlib.Path(__file__).resolve().parents[1] / "hv" / "debugmonitor.c"), "r").read()
+debug_data_meaning = {int(k): v for k,v in re.findall(r"logbuf\[(\d+)\]\s*=\s*(.*);", debugmon_c_source)}
+
+def read_by_32(addr, len_):
+    data = b''
+    for i in range(0, len_, 4):
+        data += struct.pack("<I", p.read32(addr + i))
+    return data
 
 
 p.pmgr_adt_clocks_enable(f'/arm-io/avd0')
@@ -68,12 +79,14 @@ ret = subprocess.call([
     'avd_fw_test.bin'])
 assert ret == 0
 
-
 with open('avd_fw_test.bin', 'rb') as f:
     test_fw = f.read()
 
 assert len(test_fw) <= 0x10000
 test_fw += b'\x00' * (0x10000 - len(test_fw))
+open('avd_fw_test_long.bin', 'wb').write(test_fw)
+
+test_fw = patch("avd_fw_test_long.bin")
 
 
 # # ??? tunables
@@ -487,89 +500,96 @@ def pack_words(words):
         output += struct.pack("<I", word)
     return output
 
-piodma_commands = pack_words([
-    # int(PIODMA_PACKET_LINK(MUST_BE_ONE=3, COUNT=2)),
-    # 0x80000008,
-    int(PIODMA_PACKET_RW(INCREMENT=1, ADDR=2, COUNT_MINUS_ONE=0, BASE_ADDR_REG=3)),
-    int(PIODMA_PACKET_RW(INCREMENT=1, ADDR=1, COUNT_MINUS_ONE=2, BASE_ADDR_REG=3)),
+# piodma_commands = pack_words([
+#     # int(PIODMA_PACKET_LINK(MUST_BE_ONE=3, COUNT=2)),
+#     # 0x80000008,
+#     int(PIODMA_PACKET_RW(INCREMENT=1, ADDR=2, COUNT_MINUS_ONE=0, BASE_ADDR_REG=3)),
+#     int(PIODMA_PACKET_RW(INCREMENT=1, ADDR=1, COUNT_MINUS_ONE=2, BASE_ADDR_REG=3)),
 
 
 
-    # 0xcafebabe,
-    # int(PIODMA_PACKET_LINK(MUST_BE_ONE=3, COUNT=5)),
-    # 0x80000008,
+#     # 0xcafebabe,
+#     # int(PIODMA_PACKET_LINK(MUST_BE_ONE=3, COUNT=5)),
+#     # 0x80000008,
 
-    # int(PIODMA_PACKET_RW(INCREMENT=1, ADDR=0, COUNT_MINUS_ONE=0, BASE_ADDR_REG=3)),
-    # 0xcafebabe,
-    # int(PIODMA_PACKET_RW(INCREMENT=1, ADDR=0, COUNT_MINUS_ONE=1, BASE_ADDR_REG=0)),
-    # 0xfeedf00d,
-    # 0xb00b1e5,
-])
+#     # int(PIODMA_PACKET_RW(INCREMENT=1, ADDR=0, COUNT_MINUS_ONE=0, BASE_ADDR_REG=3)),
+#     # 0xcafebabe,
+#     # int(PIODMA_PACKET_RW(INCREMENT=1, ADDR=0, COUNT_MINUS_ONE=1, BASE_ADDR_REG=0)),
+#     # 0xfeedf00d,
+#     # 0xb00b1e5,
+# ])
 
-piodma_sz = divroundup(len(piodma_commands), 0x4000) * 0x4000
-piodma_commands = piodma_commands + b'\x00' * (piodma_sz - len(piodma_commands))
+# piodma_sz = divroundup(len(piodma_commands), 0x4000) * 0x4000
+# piodma_commands = piodma_commands + b'\x00' * (piodma_sz - len(piodma_commands))
 
-piodma_buf_phys = u.heap.memalign(0x4000, piodma_sz)
-iface.writemem(piodma_buf_phys, piodma_commands)
-piodma_buf_iova = dart.iomap(1, piodma_buf_phys, piodma_sz)
-print(f"PIODMA buffer @ phys {piodma_buf_phys:016X} iova {piodma_buf_iova:016X}")
+# piodma_buf_phys = u.heap.memalign(0x4000, piodma_sz)
+# iface.writemem(piodma_buf_phys, piodma_commands)
+# piodma_buf_iova = dart.iomap(1, piodma_buf_phys, piodma_sz)
+# print(f"PIODMA buffer @ phys {piodma_buf_phys:016X} iova {piodma_buf_iova:016X}")
 
-piodma.COMMAND = R_PIODMA_COMMAND(CMD=0x7)
-piodma.IRQ_STATUS = 0xffffffff
-piodma.SRC_ADDR_LO = piodma_buf_iova & 0xffffffff
-piodma.SRC_ADDR_HI = (piodma_buf_iova >> 32) & 0xffffffff
+# piodma.COMMAND = R_PIODMA_COMMAND(CMD=0x7)
+# piodma.IRQ_STATUS = 0xffffffff
+# piodma.SRC_ADDR_LO = piodma_buf_iova & 0xffffffff
+# piodma.SRC_ADDR_HI = (piodma_buf_iova >> 32) & 0xffffffff
 
-p.write32(cm3_data_base + 0x1000, 0xaaaaaaaa)
-p.write32(cm3_data_base + 0x1004, 0xaaaaaaaa)
-p.write32(cm3_data_base + 0x1008, 0xaaaaaaaa)
-p.write32(cm3_data_base + 0x100c, 0xaaaaaaaa)
-p.write32(cm3_data_base + 0x2000, 0xbbbbbbbb)
-p.write32(cm3_data_base + 0x2004, 0xbbbbbbbc)
-p.write32(cm3_data_base + 0x2008, 0xbbbbbbbd)
-p.write32(cm3_data_base + 0x200c, 0xbbbbbbbe)
+for i in range(10):
+    print("Mem", *(hex(p.read32(cm3_data_base + i*4)) for i in range(8)))
 
-piodma.BASE_ADDR_LO[0].val = 0x28709100
-piodma.BASE_ADDR_LO[1].val = 0xaaaaaaaa
-piodma.BASE_ADDR_LO[2].val = 0xaaaaaaaa
-piodma.BASE_ADDR_LO[3].val = 0x28709200
-piodma.BASE_ADDR_LO[4].val = 0xaaaaaaaa
-piodma.BASE_ADDR_LO[5].val = 0xaaaaaaaa
-piodma.BASE_ADDR_LO[6].val = 0xaaaaaaaa
-piodma.BASE_ADDR_LO[7].val = 0xaaaaaaaa
+    for idx,name in debug_data_meaning.items():
+        print("{:>40} {}".format(name, hex(p.read32(cm3_data_base + 0xf00 + idx*4))))
 
-piodma.DST_ADDR_LO = (piodma_buf_iova + 0x1000) & 0xffffffff
-piodma.DST_ADDR_HI = ((piodma_buf_iova + 0x1000) >> 32) & 0xffffffff
 
-print("before", hex(p.read32(piodma_buf_phys + 0x1000)))
-print("before", hex(p.read32(piodma_buf_phys + 0x1004)))
-print("before", hex(p.read32(piodma_buf_phys + 0x1008)))
-print("before", hex(p.read32(piodma_buf_phys + 0x100c)))
-print("before", hex(p.read32(piodma_buf_phys + 0x1010)))
-print("before", hex(p.read32(piodma_buf_phys + 0x1014)))
-print("before", hex(p.read32(piodma_buf_phys + 0x1018)))
+# p.write32(cm3_data_base + 0x1000, 0xaaaaaaaa)
+# p.write32(cm3_data_base + 0x1004, 0xaaaaaaaa)
+# p.write32(cm3_data_base + 0x1008, 0xaaaaaaaa)
+# p.write32(cm3_data_base + 0x100c, 0xaaaaaaaa)
+# p.write32(cm3_data_base + 0x2000, 0xbbbbbbbb)
+# p.write32(cm3_data_base + 0x2004, 0xbbbbbbbc)
+# p.write32(cm3_data_base + 0x2008, 0xbbbbbbbd)
+# p.write32(cm3_data_base + 0x200c, 0xbbbbbbbe)
 
-piodma.COMMAND = R_PIODMA_COMMAND(CMD=0x13, COUNT=2)
+# piodma.BASE_ADDR_LO[0].val = 0x28709100
+# piodma.BASE_ADDR_LO[1].val = 0xaaaaaaaa
+# piodma.BASE_ADDR_LO[2].val = 0xaaaaaaaa
+# piodma.BASE_ADDR_LO[3].val = 0x28709200
+# piodma.BASE_ADDR_LO[4].val = 0xaaaaaaaa
+# piodma.BASE_ADDR_LO[5].val = 0xaaaaaaaa
+# piodma.BASE_ADDR_LO[6].val = 0xaaaaaaaa
+# piodma.BASE_ADDR_LO[7].val = 0xaaaaaaaa
 
-print(hex(p.read32(cm3_data_base + 0x1000)))
-print(hex(p.read32(cm3_data_base + 0x1004)))
-print(hex(p.read32(cm3_data_base + 0x1008)))
-print(hex(p.read32(cm3_data_base + 0x100c)))
-print(hex(p.read32(cm3_data_base + 0x2000)))
-print(hex(p.read32(cm3_data_base + 0x2004)))
-print(hex(p.read32(cm3_data_base + 0x2008)))
-print(hex(p.read32(cm3_data_base + 0x200c)))
+# piodma.DST_ADDR_LO = (piodma_buf_iova + 0x1000) & 0xffffffff
+# piodma.DST_ADDR_HI = ((piodma_buf_iova + 0x1000) >> 32) & 0xffffffff
 
-print("after", hex(p.read32(piodma_buf_phys + 0x1000)))
-print("after", hex(p.read32(piodma_buf_phys + 0x1004)))
-print("after", hex(p.read32(piodma_buf_phys + 0x1008)))
-print("after", hex(p.read32(piodma_buf_phys + 0x100c)))
-print("after", hex(p.read32(piodma_buf_phys + 0x1010)))
-print("after", hex(p.read32(piodma_buf_phys + 0x1014)))
-print("after", hex(p.read32(piodma_buf_phys + 0x1018)))
+# print("before", hex(p.read32(piodma_buf_phys + 0x1000)))
+# print("before", hex(p.read32(piodma_buf_phys + 0x1004)))
+# print("before", hex(p.read32(piodma_buf_phys + 0x1008)))
+# print("before", hex(p.read32(piodma_buf_phys + 0x100c)))
+# print("before", hex(p.read32(piodma_buf_phys + 0x1010)))
+# print("before", hex(p.read32(piodma_buf_phys + 0x1014)))
+# print("before", hex(p.read32(piodma_buf_phys + 0x1018)))
 
-print(piodma.IRQ_STATUS)
-print(piodma.STATUS)
-# why is status 0x41 after this?
+# piodma.COMMAND = R_PIODMA_COMMAND(CMD=0x13, COUNT=2)
+
+# print(hex(p.read32(cm3_data_base + 0x1000)))
+# print(hex(p.read32(cm3_data_base + 0x1004)))
+# print(hex(p.read32(cm3_data_base + 0x1008)))
+# print(hex(p.read32(cm3_data_base + 0x100c)))
+# print(hex(p.read32(cm3_data_base + 0x2000)))
+# print(hex(p.read32(cm3_data_base + 0x2004)))
+# print(hex(p.read32(cm3_data_base + 0x2008)))
+# print(hex(p.read32(cm3_data_base + 0x200c)))
+
+# print("after", hex(p.read32(piodma_buf_phys + 0x1000)))
+# print("after", hex(p.read32(piodma_buf_phys + 0x1004)))
+# print("after", hex(p.read32(piodma_buf_phys + 0x1008)))
+# print("after", hex(p.read32(piodma_buf_phys + 0x100c)))
+# print("after", hex(p.read32(piodma_buf_phys + 0x1010)))
+# print("after", hex(p.read32(piodma_buf_phys + 0x1014)))
+# print("after", hex(p.read32(piodma_buf_phys + 0x1018)))
+
+# print(piodma.IRQ_STATUS)
+# print(piodma.STATUS)
+# # why is status 0x41 after this?
 
 
 # notes on M3-side hardware
