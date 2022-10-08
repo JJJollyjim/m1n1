@@ -40,11 +40,12 @@ class AVDFirmwareSaboteur(Tracer):
     def start(self):
         avd_base, _ = self.dev.get_reg(0)
         self.avd_base = avd_base
-        self.trace(avd_base + 0x108_0000, 0x10000, mode=self.DEFAULT_MODE, prefix="CM3CODE")
+        self.trace(avd_base + 0x108_0000, 0x100, mode=self.DEFAULT_MODE, prefix="CM3CODE")
+        self.trace(avd_base + 0x108_9900, 0x2000, mode=self.DEFAULT_MODE, prefix="CM3CODE")
     def hook_w(self, addr, val, width, **kwargs):
         off_start = addr - (self.avd_base + 0x108_0000)
 
-        if off_start = 0:
+        if off_start == 0:
             self.firmware_buffer = open("patched_firmware.bin", "rb").read()
 
         assert width == 32
@@ -81,11 +82,16 @@ class AVDTracer(Tracer):
     #     print(val)
     #     self.dart_tracer.dart.dump_all()
 
+    def evt_rw(self, *args, **kwargs):
+        print(f"~~~ DebugMonitor says: {hex(p.read32(self.avd_base+0x109_0000+0xff0))} {hex(p.read32(self.avd_base+0x109_0000+0xf00))} {hex(p.read32(self.avd_base+0x109_0000+0xf04))} {hex(p.read32(self.avd_base+0x109_0000+0xf08))} {hex(p.read32(self.avd_base+0x109_0000+0xf0c))} ~~~")
+
+        super().evt_rw(*args, **kwargs)
+
+
     def w_CM3Ctrl_MAILBOX0_SUBMIT(self, val):
         # print("w", val)
         val = int(val)
         print("~~~~~ SUBMIT COMMAND @ {val:08X} ~~~~~")
-        print(f"~~~~~ THE MODIFIED FIRMWARE SAYS: {hex(p.read32(self.avd_base+0x109_0000+0xff0))} ~~~~~")
         if val >= 0x109_0000 and val < 0x10a_0000:
             data = read_by_32(self.avd_base + val, 0x60)
             chexdump(data)

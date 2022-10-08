@@ -53,7 +53,7 @@ def patch(filename="firmware_dump.bin"):
 
     new_fw = firmware[0:4] + (len(firmware)+1).to_bytes(4, "little") + firmware[8:48] + (len(firmware)+len(pre_init_code)+1).to_bytes(4, "little") + firmware[52:] + pre_init_code + debug_mon_code
     new_fw += b"\x00"*(0x1_0000-len(new_fw))
-    open("patched_firwmare.bin", "wb").write(new_fw)
+    open("patched_firmware.bin", "wb").write(new_fw)
     return new_fw
 
 if __name__ == "__main__":

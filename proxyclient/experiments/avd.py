@@ -14,7 +14,7 @@ import time
 import re
 
 debugmon_c_source = open((pathlib.Path(__file__).resolve().parents[1] / "hv" / "debugmonitor.c"), "r").read()
-debug_data_meaning = {int(k): v for k,v in re.findall(r"logbuf\[(\d+)\]\s*=\s*(.*);", debugmon_c_source)}
+debug_data_meaning = {int(k): v for k,v in re.findall(r"^\s*logbuf\[(\d+)\]\s*=\s*(.*);", debugmon_c_source, re.MULTILINE)}
 
 def read_by_32(addr, len_):
     data = b''
